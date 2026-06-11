@@ -1,69 +1,45 @@
-# Distributed Loader
+# Asynchronous Distributed Batch Ingestion Engine
 
-Everyone builds CRUD APIs, but this project is built for scale.
+A simple batch processing system built with Node.js, TypeScript, Express, PostgreSQL, Prisma, Redis, BullMQ, and Socket.IO.
 
-It is an asynchronous distributed batch ingestion engine using TypeScript, Node.js, PostgreSQL, Redis, BullMQ, Prisma, and Socket.IO.
+## What It Does
 
-## What it does
+- Accepts one raw JSON array payload.
+- Creates a `BatchJob` row in PostgreSQL with `PENDING` status.
+- Sends the raw payload to BullMQ in Redis.
+- Returns `202 Accepted` immediately with a `jobId`.
+- Processes records in chunks of 100 inside a worker.
+- Stores progress and errors in PostgreSQL.
+- Sends live progress updates to the correct Socket.IO room.
 
-1. Express accepts a raw JSON array payload.
-2. Prisma writes a `BatchJob` row with `PENDING` status.
-3. BullMQ pushes the raw payload into Redis.
-4. The API returns `202 Accepted` immediately with a `jobId`.
-5. A background worker processes rows in chunks of 100.
-6. Progress and errors are written back to PostgreSQL.
-7. Live progress is streamed to the exact Socket.IO room for that `jobId`.
+## Flow
 
-## Architecture
+1. Client sends a heavy JSON array.
+2. Express saves job metadata with Prisma.
+3. BullMQ queues the raw payload.
+4. Worker parses and processes the data in chunks.
+5. PostgreSQL stores `processedRows` and `JobError` records.
+6. Socket.IO emits progress to the matching `jobId` room.
 
-```mermaid
-flowchart LR
-  A[Client] --> B[Express API]
-  B --> C[Prisma writes BatchJob = PENDING]
-  B --> D[BullMQ Queue in Redis]
-  B --> E[HTTP 202 Accepted]
-  D --> F[Worker Node]
-  F --> G[Parse JSON in worker]
-  G --> H[Process 100 rows per chunk]
-  H --> I[PostgreSQL: processedRows + JobError]
-  H --> J[Socket.IO room = jobId]
-  J --> A
-  I --> C
-```
+## Stack
 
-## Architectural Mechanics
+- TypeScript
+- Node.js
+- Express
+- PostgreSQL
+- Prisma ORM
+- Redis
+- BullMQ
+- Socket.IO
 
-### 1. Fast HTTP 202
+## Project Files
 
-The request path only handles metadata, creates the job row, and queues the payload.
-The response returns immediately so the API thread does not sit and wait for the batch to finish.
-
-### 2. Memory-Safe Workers
-
-The worker processes records in chunks of 100.
-That keeps the execution loop small and easy to reason about under heavy load.
-
-### 3. Live Telemetry
-
-After each chunk, the worker updates `processedRows` in PostgreSQL and emits progress to the room named after the `jobId`.
-That means only the correct client gets the live updates.
-
-## Why this design is strong
-
-- The API stays fast under heavy payloads.
-- The worker owns the slow work.
-- PostgreSQL remains the source of truth for job state.
-- Socket.IO avoids polling and gives real-time progress.
-- BullMQ and Redis decouple ingestion from execution.
-
-## Main files
-
-- [src/server.ts](src/server.ts) boots Express, Socket.IO, and the worker.
-- [src/controllers/batch.controller.ts](src/controllers/batch.controller.ts) accepts the request and creates the job.
+- [src/server.ts](src/server.ts) starts the app.
+- [src/controllers/batch.controller.ts](src/controllers/batch.controller.ts) handles the request and queues the job.
 - [src/queues/batch.queue.ts](src/queues/batch.queue.ts) defines the BullMQ queue.
 - [src/workers/batch.worker.ts](src/workers/batch.worker.ts) processes records in the background.
-- [src/services/socket.service.ts](src/services/socket.service.ts) manages room joins and progress events.
-- [prisma/schema.prisma](prisma/schema.prisma) defines `BatchJob` and `JobError`.
+- [src/services/socket.service.ts](src/services/socket.service.ts) handles rooms and events.
+- [prisma/schema.prisma](prisma/schema.prisma) defines the database schema.
 
 ## Environment
 
@@ -73,7 +49,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/distributed_loader
 REDIS_URL=redis://127.0.0.1:6379
 ```
 
-## Run locally
+## Run
 
 ```bash
 npm install
@@ -81,7 +57,7 @@ npx prisma generate
 npm run dev
 ```
 
-## Request shape
+## Request Body
 
 Send raw JSON text containing an array:
 
@@ -89,10 +65,13 @@ Send raw JSON text containing an array:
 [{"name":"A"},{"name":"B"}]
 ```
 
-## Interview Pitch
+## Response
 
-> I engineered an asynchronous distributed batch ingestion engine using TypeScript, Node.js, and PostgreSQL. Express registers metadata through Prisma, delegates the payload to a BullMQ Redis queue, and returns `202 Accepted` immediately. Background workers process rows in chunks of 100, keep the execution loop small, update progress in PostgreSQL, and stream live metrics back to the exact Socket.IO room for that job.
+```json
+{
+  "success": true,
+  "message": "Batch accepted and queued",
+  "jobId": "uuid"
+}
+```
 
-## Honest note
-
-The code is designed for low memory pressure and clean scaling behavior, but exact memory numbers like "under 30MB" depend on payload shape, runtime settings, and database load.
