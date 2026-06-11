@@ -12,6 +12,21 @@ A simple batch processing system built with Node.js, TypeScript, Express, Postgr
 - Stores progress and errors in PostgreSQL.
 - Sends live progress updates to the correct Socket.IO room.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  A[Client App / Postman] -->|1. Heavy JSON array payload| B[Express API]
+  B -->|2. Save BatchJob = PENDING| C[(PostgreSQL)]
+  B -->|3. Enqueue raw payload| D[BullMQ Queue]
+  B -->|4. Return 202 Accepted + jobId| A
+  D -->|5. Background job| E[TypeScript Worker]
+  E -->|6. Parse and process in chunks of 100| F[Chunked Batch Logic]
+  F -->|7. Update processedRows + JobError| C
+  F -->|8. Emit live progress| G[Socket.IO Room by jobId]
+  G --> A
+```
+
 ## Flow
 
 1. Client sends a heavy JSON array.
@@ -74,4 +89,3 @@ Send raw JSON text containing an array:
   "jobId": "uuid"
 }
 ```
-
