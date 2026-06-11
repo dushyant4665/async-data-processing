@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# async-data-processing-pipeline
-High-throughput asynchronous batch data ingestion engine built with Node.js, TypeScript, and PostgreSQL. Decouples heavy parsing operations from the main Express event loop using a serverless Redis BullMQ queue. Implements memory-safe execution loops chunked at 100 rows with real-time progress broadcasts via Socket.io WebSockets.
-=======
 # Distributed Loader
 
 Everyone builds CRUD APIs, but this project is built for scale.
@@ -100,4 +96,3 @@ Send raw JSON text containing an array:
 ## Honest note
 
 The code is designed for low memory pressure and clean scaling behavior, but exact memory numbers like "under 30MB" depend on payload shape, runtime settings, and database load.
->>>>>>> 21032ca (feat: add async batch processing engine)
