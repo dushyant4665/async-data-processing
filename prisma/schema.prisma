@@ -1,0 +1,40 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum BatchJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model BatchJob {
+  id            String          @id @default(uuid())
+  fileName      String
+  status        BatchJobStatus   @default(PENDING)
+  totalRows     Int              @default(0)
+  processedRows Int              @default(0)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  errors        JobError[]
+
+  @@index([status, createdAt])
+}
+
+model JobError {
+  id         String   @id @default(uuid())
+  batchJobId String
+  rowNumber  Int
+  reason     String
+  createdAt  DateTime @default(now())
+
+  batchJob BatchJob @relation(fields: [batchJobId], references: [id], onDelete: Cascade)
+
+  @@index([batchJobId, rowNumber])
+}
