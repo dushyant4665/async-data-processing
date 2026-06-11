@@ -1,4 +1,4 @@
-# Asynchronous Distributed Batch Ingestion Engine
+# Asynchronous Data Processing Pipeline
 
 A simple batch processing system built with Node.js, TypeScript, Express, PostgreSQL, Prisma, Redis, BullMQ, and Socket.IO.
 
