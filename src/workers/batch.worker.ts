@@ -66,68 +66,79 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
     BATCH_QUEUE_NAME,
     async (job: Job<BatchQueuePayload>) => {
       const { jobId, rawRecords } = job.data;
-      const parsedRecords: unknown = JSON.parse(rawRecords);
 
-      if (!Array.isArray(parsedRecords)) {
-        throw new Error('request body must be a JSON array');
-      }
+      try {
+        const parsedRecords: unknown = JSON.parse(rawRecords);
 
-      const records = parsedRecords as BatchRecordInput[];
-      const totalRows = records.length;
-
-      await prisma.batchJob.update({
-        where: { id: jobId },
-        data: { status: 'PROCESSING', totalRows }
-      });
-
-      let processedRows = 0;
-
-      for (let start = 0; start < totalRows; start += chunkSize) {
-        const chunk = records.slice(start, start + chunkSize);
-
-        try {
-          await processChunk(jobId, chunk, start);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown chunk error';
-
-          await prisma.jobError.create({
-            data: {
-              batchJobId: jobId,
-              rowNumber: start + 1,
-              reason: message
-            }
-          });
+        if (!Array.isArray(parsedRecords)) {
+          throw new Error('request body must be a JSON array');
         }
 
-        processedRows = Math.min(start + chunk.length, totalRows);
-        await updateProgress(jobId, processedRows, totalRows);
+        const records = parsedRecords as BatchRecordInput[];
+        const totalRows = records.length;
+
+        await prisma.batchJob.update({
+          where: { id: jobId },
+          data: { status: 'PROCESSING', totalRows }
+        });
+
+        let processedRows = 0;
+
+        for (let start = 0; start < totalRows; start += chunkSize) {
+          const chunk = records.slice(start, start + chunkSize);
+
+          try {
+            await processChunk(jobId, chunk, start);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unknown chunk error';
+
+            await prisma.jobError.create({
+              data: {
+                batchJobId: jobId,
+                rowNumber: start + 1,
+                reason: message
+              }
+            });
+          }
+
+          processedRows = Math.min(start + chunk.length, totalRows);
+          await updateProgress(jobId, processedRows, totalRows);
+        }
+
+        await prisma.batchJob.update({
+          where: { id: jobId },
+          data: { status: 'COMPLETED', processedRows: totalRows }
+        });
+
+        emitJobCompleted(jobId);
+
+        return { jobId, totalRows, processedRows: totalRows };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Worker failed';
+
+        await prisma.$transaction([
+          prisma.jobError.create({
+            data: {
+              batchJobId: jobId,
+              rowNumber: 0,
+              reason: message
+            }
+          }),
+          prisma.batchJob.update({
+            where: { id: jobId },
+            data: { status: 'FAILED' }
+          })
+        ]);
+
+        emitJobFailed(jobId, message);
+        throw error;
       }
-
-      await prisma.batchJob.update({
-        where: { id: jobId },
-        data: { status: 'COMPLETED', processedRows: totalRows }
-      });
-
-      emitJobCompleted(jobId);
-
-      return { jobId, totalRows, processedRows: totalRows };
     },
     {
       connection: redisConnection,
       concurrency: 2
     }
   );
-
-  worker.on('failed', async (job, error) => {
-    if (job?.data?.jobId) {
-      const message = error instanceof Error ? error.message : 'Worker failed';
-      await prisma.batchJob.update({
-        where: { id: job.data.jobId },
-        data: { status: 'FAILED' }
-      });
-      emitJobFailed(job.data.jobId, message);
-    }
-  });
 
   return worker;
 };
