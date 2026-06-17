@@ -1,9 +1,15 @@
 import { Prisma } from '@prisma/client';
+import type { InputJsonValue } from '@prisma/client/runtime/library';
 import { Worker, type Job } from 'bullmq';
 import { prisma } from '../config/database.js';
-import { BATCH_QUEUE_NAME, type BatchQueuePayload, type BatchRecordInput } from '../queues/batch.queue.js';
+import {
+  BATCH_QUEUE_NAME,
+  bullmqConnection,
+  PROCESS_BATCH_JOB_NAME,
+  type BatchQueuePayload,
+  type BatchRecordInput
+} from '../queues/batch.queue.js';
 import { emitJobCompleted, emitJobFailed, emitJobProgress } from '../services/socket.service.js';
-import { redisConnection } from '../config/redis.js';
 
 const chunkSize = 100;
 
@@ -35,10 +41,20 @@ const processChunk = async (
       continue;
     }
 
-    operations.push(prisma.$executeRaw(Prisma.sql`SELECT 1`));
+    operations.push(
+      prisma.ingestedRecord.create({
+        data: {
+          batchJobId: jobId,
+          rowNumber,
+          payload: record as InputJsonValue
+        }
+      })
+    );
   }
 
-  await prisma.$transaction(operations);
+  if (operations.length > 0) {
+    await prisma.$transaction(operations);
+  }
 };
 
 const updateProgress = async (jobId: string, processedRows: number, totalRows: number): Promise<void> => {
@@ -65,6 +81,10 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
   const worker = new Worker<BatchQueuePayload>(
     BATCH_QUEUE_NAME,
     async (job: Job<BatchQueuePayload>) => {
+      if (job.name !== PROCESS_BATCH_JOB_NAME) {
+        throw new Error(`Unexpected job name: ${job.name}`);
+      }
+
       const { jobId, rawRecords } = job.data;
 
       try {
@@ -135,7 +155,7 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
       }
     },
     {
-      connection: redisConnection,
+      connection: bullmqConnection,
       concurrency: 2
     }
   );

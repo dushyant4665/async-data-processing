@@ -11,33 +11,6 @@ export interface JobProgressPayload {
 
 let io: SocketIOServer | null = null;
 
-const joinedJobs = new Map<string, Set<string>>();
-
-const addSocketToJob = (socketId: string, jobId: string): void => {
-  const jobs = joinedJobs.get(socketId) ?? new Set<string>();
-  jobs.add(jobId);
-  joinedJobs.set(socketId, jobs);
-};
-
-const removeSocketFromJob = (socketId: string, jobId: string): void => {
-  const jobs = joinedJobs.get(socketId);
-  if (!jobs) {
-    return;
-  }
-
-  jobs.delete(jobId);
-
-  if (jobs.size === 0) {
-    joinedJobs.delete(socketId);
-  } else {
-    joinedJobs.set(socketId, jobs);
-  }
-};
-
-const clearSocketJobs = (socketId: string): void => {
-  joinedJobs.delete(socketId);
-};
-
 export const initializeSocketService = (server: HttpServer): SocketIOServer => {
   if (io) {
     return io;
@@ -53,22 +26,14 @@ export const initializeSocketService = (server: HttpServer): SocketIOServer => {
   io.on('connection', (socket) => {
     socket.on('join-job', (jobId: string) => {
       if (typeof jobId === 'string' && jobId.trim().length > 0) {
-        const roomId = jobId.trim();
-        socket.join(roomId);
-        addSocketToJob(socket.id, roomId);
+        socket.join(jobId.trim());
       }
     });
 
     socket.on('leave-job', (jobId: string) => {
       if (typeof jobId === 'string' && jobId.trim().length > 0) {
-        const roomId = jobId.trim();
-        socket.leave(roomId);
-        removeSocketFromJob(socket.id, roomId);
+        socket.leave(jobId.trim());
       }
-    });
-
-    socket.on('disconnect', () => {
-      clearSocketJobs(socket.id);
     });
   });
 

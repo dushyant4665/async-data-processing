@@ -1,60 +1,54 @@
 # Asynchronous Data Processing Pipeline
 
-A simple batch processing system built with Node.js, TypeScript, Express, PostgreSQL, Prisma, Redis, BullMQ, and Socket.IO.
+This project takes a big JSON array, saves a job in PostgreSQL, pushes the work to Redis/BullMQ, and processes it in a separate worker.
 
-## What It Does
-
-- Accepts one raw JSON array payload.
-- Creates a `BatchJob` row in PostgreSQL with `PENDING` status.
-- Sends the raw payload to BullMQ in Redis.
-- Returns `202 Accepted` immediately with a `jobId`.
-- Processes records in chunks of 100 inside a worker.
-- Stores progress and errors in PostgreSQL.
-- Sends live progress updates to the correct Socket.IO room.
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
-  A[Client App / Postman] -->|1. Heavy JSON array payload| B[Express API]
-  B -->|2. Save BatchJob = PENDING| C[(PostgreSQL)]
-  B -->|3. Enqueue raw payload| D[BullMQ Queue]
-  B -->|4. Return 202 Accepted + jobId| A
-  D -->|5. Background job| E[TypeScript Worker]
-  E -->|6. Parse and process in chunks of 100| F[Chunked Batch Logic]
-  F -->|7. Update processedRows + JobError| C
-  F -->|8. Emit live progress| G[Socket.IO Room by jobId]
-  G --> A
+  A[Client] --> B[API]
+  B --> C[(PostgreSQL)]
+  B --> D[Redis Queue]
+  D --> E[Worker]
+  E --> C
+  E --> F[Socket.IO Updates]
+  F --> A
 ```
 
-## Flow
-
-1. Client sends a heavy JSON array.
-2. Express saves job metadata with Prisma.
-3. BullMQ queues the raw payload.
-4. Worker parses and processes the data in chunks.
-5. PostgreSQL stores `processedRows` and `JobError` records.
-6. Socket.IO emits progress to the matching `jobId` room.
+1. Client sends raw JSON array text.
+2. API creates a `BatchJob`.
+3. API adds the job to BullMQ.
+4. Worker reads the job and processes records in chunks.
+5. Valid rows go into `IngestedRecord`.
+6. Bad rows go into `JobError`.
+7. Progress is sent back with Socket.IO.
 
 ## Stack
 
-- TypeScript
 - Node.js
+- TypeScript
 - Express
 - PostgreSQL
-- Prisma ORM
+- Prisma
 - Redis
 - BullMQ
 - Socket.IO
+- Docker
 
-## Project Files
+## Run locally
 
-- [src/server.ts](src/server.ts) starts the app.
-- [src/controllers/batch.controller.ts](src/controllers/batch.controller.ts) handles the request and queues the job.
-- [src/queues/batch.queue.ts](src/queues/batch.queue.ts) defines the BullMQ queue.
-- [src/workers/batch.worker.ts](src/workers/batch.worker.ts) processes records in the background.
-- [src/services/socket.service.ts](src/services/socket.service.ts) handles rooms and events.
-- [prisma/schema.prisma](prisma/schema.prisma) defines the database schema.
+```bash
+npm install
+npx prisma generate
+npm run prisma:deploy
+npm run dev
+```
+
+## Docker
+
+```bash
+docker compose up --build
+```
 
 ## Environment
 
@@ -64,17 +58,9 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/distributed_loader
 REDIS_URL=redis://127.0.0.1:6379
 ```
 
-## Run
+## Request
 
-```bash
-npm install
-npx prisma generate
-npm run dev
-```
-
-## Request Body
-
-Send raw JSON text containing an array:
+Send a raw JSON array:
 
 ```json
 [{"name":"A"},{"name":"B"}]

@@ -1,5 +1,9 @@
 import type { Request, Response } from 'express';
-import { batchQueue, type BatchQueuePayload } from '../queues/batch.queue.js';
+import {
+  batchQueue,
+  PROCESS_BATCH_JOB_NAME,
+  type BatchQueuePayload
+} from '../queues/batch.queue.js';
 import { prisma } from '../config/database.js';
 
 export const createBatchJob = async (
@@ -35,7 +39,7 @@ export const createBatchJob = async (
       rawRecords: rawBody
     };
 
-    await batchQueue.add('process-batch', payload, {
+    await batchQueue.add(PROCESS_BATCH_JOB_NAME, payload, {
       jobId: job.id,
       removeOnComplete: true,
       removeOnFail: false

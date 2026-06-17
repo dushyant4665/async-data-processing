@@ -22,9 +22,22 @@ model BatchJob {
   processedRows Int              @default(0)
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
+  records       IngestedRecord[]
   errors        JobError[]
 
   @@index([status, createdAt])
+}
+
+model IngestedRecord {
+  id         String   @id @default(uuid())
+  batchJobId String
+  rowNumber  Int
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  batchJob BatchJob @relation(fields: [batchJobId], references: [id], onDelete: Cascade)
+
+  @@index([batchJobId, rowNumber])
 }
 
 model JobError {
