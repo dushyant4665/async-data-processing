@@ -1,9 +1,7 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 import { redisConnection } from '../config/redis.js';
 
-export interface BatchRecordInput {
-  [key: string]: unknown;
-}
+export type BatchRecordInput = Record<string, unknown>;
 
 export interface BatchQueuePayload {
   jobId: string;

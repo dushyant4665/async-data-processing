@@ -1,6 +1,6 @@
-# Asynchronous Data Processing Pipeline
+# Asynchronous Batch Ingestion Engine
 
-This project takes a big JSON array, saves a job in PostgreSQL, pushes the work to Redis/BullMQ, and processes it in a separate worker.
+This project accepts a large JSON array as raw text, stores a job in PostgreSQL, pushes the work to Redis/BullMQ, and processes it in a separate worker process.
 
 ## How it works
 
@@ -11,8 +11,6 @@ flowchart LR
   B --> D[Redis Queue]
   D --> E[Worker]
   E --> C
-  E --> F[Socket.IO Updates]
-  F --> A
 ```
 
 1. Client sends raw JSON array text.
@@ -21,8 +19,6 @@ flowchart LR
 4. Worker reads the job and processes records in chunks.
 5. Valid rows go into `IngestedRecord`.
 6. Bad rows go into `JobError`.
-7. Progress is sent back with Socket.IO.
-
 ## Stack
 
 - Node.js
@@ -32,7 +28,6 @@ flowchart LR
 - Prisma
 - Redis
 - BullMQ
-- Socket.IO
 - Docker
 
 ## Run locally

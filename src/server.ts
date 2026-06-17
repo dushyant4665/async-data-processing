@@ -1,20 +1,15 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { createServer } from 'node:http';
 import { createBatchJob } from './controllers/batch.controller.js';
-import { batchQueue } from './queues/batch.queue.js';
-import { initializeSocketService } from './services/socket.service.js';
 import { prisma } from './config/database.js';
 import { redisConnection } from './config/redis.js';
 
 const app = express();
-const server = createServer(app);
+let httpServer: ReturnType<typeof app.listen> | null = null;
 
 app.use(cors());
 app.use(express.text({ type: ['application/json', 'text/plain'], limit: '25mb' }));
-
-initializeSocketService(server);
 
 app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true });
@@ -25,20 +20,21 @@ app.post('/api/batch', createBatchJob);
 const port = Number(process.env.PORT ?? 3001);
 
 const shutdown = async (): Promise<void> => {
-  await batchQueue.close().catch(() => undefined);
   await prisma.$disconnect();
   await redisConnection.quit().catch(() => undefined);
 
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  if (httpServer) {
+    await new Promise<void>((resolve) => {
+      httpServer?.close(() => resolve());
+    });
+  }
 
   process.exit(0);
 };
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-server.listen(port, () => {
+httpServer = app.listen(port, () => {
   console.log(`Batch engine listening on port ${port}`);
 });
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

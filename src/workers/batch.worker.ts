@@ -9,27 +9,22 @@ import {
   type BatchQueuePayload,
   type BatchRecordInput
 } from '../queues/batch.queue.js';
-import { emitJobCompleted, emitJobFailed, emitJobProgress } from '../services/socket.service.js';
 
-const chunkSize = 100;
+const CHUNK_SIZE = 100;
 
-const isValidRecord = (record: BatchRecordInput): boolean => {
-  return typeof record === 'object' && record !== null && !Array.isArray(record) && Object.keys(record).length > 0;
+const isPlainRecord = (value: unknown): value is BatchRecordInput => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
-const processChunk = async (
-  jobId: string,
-  chunk: BatchRecordInput[],
-  offset: number
-): Promise<void> => {
-  const operations: Prisma.PrismaPromise<unknown>[] = [];
+const saveChunk = async (jobId: string, chunk: unknown[], startRow: number): Promise<void> => {
+  const queries: Prisma.PrismaPromise<unknown>[] = [];
 
   for (let index = 0; index < chunk.length; index += 1) {
     const record = chunk[index];
-    const rowNumber = offset + index + 1;
+    const rowNumber = startRow + index + 1;
 
-    if (!isValidRecord(record)) {
-      operations.push(
+    if (!isPlainRecord(record) || Object.keys(record).length === 0) {
+      queries.push(
         prisma.jobError.create({
           data: {
             batchJobId: jobId,
@@ -41,7 +36,7 @@ const processChunk = async (
       continue;
     }
 
-    operations.push(
+    queries.push(
       prisma.ingestedRecord.create({
         data: {
           batchJobId: jobId,
@@ -52,33 +47,13 @@ const processChunk = async (
     );
   }
 
-  if (operations.length > 0) {
-    await prisma.$transaction(operations);
+  if (queries.length > 0) {
+    await prisma.$transaction(queries);
   }
 };
 
-const updateProgress = async (jobId: string, processedRows: number, totalRows: number): Promise<void> => {
-  const percentage = totalRows === 0 ? 100 : Math.round((processedRows / totalRows) * 100);
-
-  await prisma.batchJob.update({
-    where: { id: jobId },
-    data: {
-      processedRows,
-      status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
-    }
-  });
-
-  emitJobProgress({
-    jobId,
-    processedRows,
-    totalRows,
-    percentage,
-    status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
-  });
-};
-
 export const startBatchWorker = (): Worker<BatchQueuePayload> => {
-  const worker = new Worker<BatchQueuePayload>(
+  return new Worker<BatchQueuePayload>(
     BATCH_QUEUE_NAME,
     async (job: Job<BatchQueuePayload>) => {
       if (job.name !== PROCESS_BATCH_JOB_NAME) {
@@ -94,45 +69,38 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
           throw new Error('request body must be a JSON array');
         }
 
-        const records = parsedRecords as BatchRecordInput[];
+        const records = parsedRecords as unknown[];
         const totalRows = records.length;
 
         await prisma.batchJob.update({
           where: { id: jobId },
-          data: { status: 'PROCESSING', totalRows }
+          data: {
+            status: 'PROCESSING',
+            totalRows,
+            processedRows: 0
+          }
         });
 
-        let processedRows = 0;
+        for (let start = 0; start < totalRows; start += CHUNK_SIZE) {
+          const chunk = records.slice(start, start + CHUNK_SIZE);
+          await saveChunk(jobId, chunk, start);
 
-        for (let start = 0; start < totalRows; start += chunkSize) {
-          const chunk = records.slice(start, start + chunkSize);
+          const processedRows = Math.min(start + chunk.length, totalRows);
 
-          try {
-            await processChunk(jobId, chunk, start);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'Unknown chunk error';
-
-            await prisma.jobError.create({
-              data: {
-                batchJobId: jobId,
-                rowNumber: start + 1,
-                reason: message
-              }
-            });
-          }
-
-          processedRows = Math.min(start + chunk.length, totalRows);
-          await updateProgress(jobId, processedRows, totalRows);
+          await prisma.batchJob.update({
+            where: { id: jobId },
+            data: {
+              processedRows,
+              status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
+            }
+          });
         }
 
-        await prisma.batchJob.update({
-          where: { id: jobId },
-          data: { status: 'COMPLETED', processedRows: totalRows }
-        });
-
-        emitJobCompleted(jobId);
-
-        return { jobId, totalRows, processedRows: totalRows };
+        return {
+          jobId,
+          totalRows,
+          processedRows: totalRows
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Worker failed';
 
@@ -150,7 +118,6 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
           })
         ]);
 
-        emitJobFailed(jobId, message);
         throw error;
       }
     },
@@ -159,6 +126,4 @@ export const startBatchWorker = (): Worker<BatchQueuePayload> => {
       concurrency: 2
     }
   );
-
-  return worker;
 };
