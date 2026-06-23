@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { createBatchJob } from './controllers/batch.controller.js';
+import { createBatchJob, getBatchJob } from './controllers/batch.controller.js';
 import { prisma } from './config/database.js';
 import { redisConnection } from './config/redis.js';
 
@@ -16,6 +16,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/api/batch', createBatchJob);
+app.get('/api/batch/:jobId', getBatchJob);
 
 const port = Number(process.env.PORT ?? 3001);
 

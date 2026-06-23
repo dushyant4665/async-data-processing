@@ -30,6 +30,15 @@ flowchart LR
 - BullMQ
 - Docker
 
+## What is implemented
+
+- API accepts raw JSON array text and returns quickly with a queued job id.
+- Worker processes records in small chunks of 100 so memory use stays lower.
+- PostgreSQL stores job state, valid rows, and row-level errors.
+- Redis + BullMQ handles background processing.
+- Docker runs API, worker, Postgres, and Redis together.
+- `npm run benchmark` compares one-shot processing with chunked async processing.
+
 ## Run locally
 
 ```bash
@@ -70,3 +79,13 @@ Send a raw JSON array:
   "jobId": "uuid"
 }
 ```
+
+## Check Job Status
+
+Get one batch job by id:
+
+```http
+GET /api/batch/:jobId
+```
+
+Response includes the job status, row counts, and record/error totals.

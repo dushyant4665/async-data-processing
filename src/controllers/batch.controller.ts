@@ -1,77 +1,55 @@
 import type { Request, Response } from 'express';
 import {
-  batchQueue,
-  PROCESS_BATCH_JOB_NAME,
-  type BatchQueuePayload
-} from '../queues/batch.queue.js';
-import { prisma } from '../config/database.js';
+  createBatchJobFromRawText,
+  getBatchJobById
+} from '../services/batch.service.js';
 
 export const createBatchJob = async (
   req: Request<unknown, unknown, string>,
   res: Response
 ): Promise<Response> => {
-  let createdJobId: string | null = null;
-  let failureMessage = 'Failed to create batch job';
-
   try {
-    const rawBody = req.body;
-    const fileName = `batch-${Date.now()}.json`;
-
-    if (typeof rawBody !== 'string' || rawBody.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'request body must contain a JSON array string'
-      });
-    }
-
-    const job = await prisma.batchJob.create({
-      data: {
-        fileName,
-        totalRows: 0,
-        status: 'PENDING'
-      }
-    });
-    createdJobId = job.id;
-
-    const payload: BatchQueuePayload = {
-      jobId: job.id,
-      fileName,
-      rawRecords: rawBody
-    };
-
-    await batchQueue.add(PROCESS_BATCH_JOB_NAME, payload, {
-      jobId: job.id,
-      removeOnComplete: true,
-      removeOnFail: false
-    });
-
+    const { jobId } = await createBatchJobFromRawText(req.body);
     return res.status(202).json({
       success: true,
       message: 'Batch accepted and queued',
-      jobId: job.id
+      jobId
     });
   } catch (error) {
-    failureMessage = error instanceof Error ? error.message : failureMessage;
+    const message = error instanceof Error ? error.message : 'Failed to create batch job';
+    const statusCode = message.includes('request body') ? 400 : 500;
 
-    if (createdJobId) {
-      await prisma.$transaction([
-        prisma.jobError.create({
-          data: {
-            batchJobId: createdJobId,
-            rowNumber: 0,
-            reason: failureMessage
-          }
-        }),
-        prisma.batchJob.update({
-          where: { id: createdJobId },
-          data: { status: 'FAILED' }
-        })
-      ]);
-    }
-
-    return res.status(400).json({
+    return res.status(statusCode).json({
       success: false,
-      message: failureMessage
+      message
     });
   }
+};
+
+export const getBatchJob = async (
+  req: Request<{ jobId: string }>,
+  res: Response
+): Promise<Response> => {
+  const { jobId } = req.params;
+
+  if (!jobId || jobId.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'jobId is required'
+    });
+  }
+
+  const job = await getBatchJobById(jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      message: 'Batch job not found'
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    data: job
+  });
 };
