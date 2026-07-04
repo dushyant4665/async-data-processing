@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import type { InputJsonValue } from '@prisma/client/runtime/library';
 import { prisma } from '../config/database.js';
+import { emitBatchProgressSafely } from '../realtime/batch-progress.js';
 import {
   batchQueue,
   PROCESS_BATCH_JOB_NAME,
@@ -19,7 +20,7 @@ const makeBatchFileName = (): string => {
 };
 
 const failBatchJob = async (jobId: string, reason: string): Promise<void> => {
-  await prisma.$transaction([
+  const job = await prisma.$transaction([
     prisma.jobError.create({
       data: {
         batchJobId: jobId,
@@ -32,6 +33,14 @@ const failBatchJob = async (jobId: string, reason: string): Promise<void> => {
       data: { status: 'FAILED' }
     })
   ]);
+
+  await emitBatchProgressSafely({
+    jobId,
+    status: 'FAILED',
+    totalRows: job[1].totalRows,
+    processedRows: job[1].processedRows,
+    reason
+  });
 };
 
 const saveChunk = async (jobId: string, records: unknown[], startRow: number): Promise<void> => {
@@ -102,6 +111,13 @@ export const createBatchJobFromRawText = async (rawBody: string): Promise<{ jobI
     throw new Error(reason);
   }
 
+  await emitBatchProgressSafely({
+    jobId: job.id,
+    status: 'PENDING',
+    totalRows: 0,
+    processedRows: 0
+  });
+
   return { jobId: job.id };
 };
 
@@ -128,6 +144,13 @@ export const processBatchJob = async (payload: BatchQueuePayload): Promise<{
     }
   });
 
+  await emitBatchProgressSafely({
+    jobId: payload.jobId,
+    status: 'PROCESSING',
+    totalRows,
+    processedRows: 0
+  });
+
   // Process fixed-size blocks so the worker stays steady on large payloads.
   for (let startRow = 0; startRow < totalRows; startRow += CHUNK_SIZE) {
     const chunk = records.slice(startRow, startRow + CHUNK_SIZE);
@@ -142,6 +165,13 @@ export const processBatchJob = async (payload: BatchQueuePayload): Promise<{
         processedRows,
         status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
       }
+    });
+
+    await emitBatchProgressSafely({
+      jobId: payload.jobId,
+      status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING',
+      totalRows,
+      processedRows
     });
   }
 
