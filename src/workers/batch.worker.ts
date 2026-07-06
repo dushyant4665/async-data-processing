@@ -1,21 +1,20 @@
-import { Worker, type Job } from 'bullmq';
+import { Worker } from 'bullmq';
 import {
   BATCH_QUEUE_NAME,
   bullmqConnection,
-  PROCESS_BATCH_JOB_NAME,
-  type BatchQueuePayload
+  PROCESS_BATCH_JOB_NAME
 } from '../queues/batch.queue.js';
 import { markBatchJobFailed, processBatchJob } from '../services/batch.service.js';
 
-export const startBatchWorker = (): Worker<BatchQueuePayload> => {
-  return new Worker<BatchQueuePayload>(
+export const startBatchWorker = () => {
+  return new Worker(
     BATCH_QUEUE_NAME,
-    async (job: Job<BatchQueuePayload>) => {
+    async (job: any) => {
       if (job.name !== PROCESS_BATCH_JOB_NAME) {
-        throw new Error(`Unexpected job name: ${job.name}`);
+        throw new Error('Unexpected job name');
       }
 
-      const { jobId } = job.data;
+      const jobId = job.data.jobId;
 
       try {
         return await processBatchJob(job.data);

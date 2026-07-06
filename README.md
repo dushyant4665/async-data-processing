@@ -1,6 +1,6 @@
 # Asynchronous Batch Ingestion Engine
 
-This project accepts a large JSON array as raw text, stores a job in PostgreSQL, pushes the work to Redis/BullMQ, and processes it in a separate worker process.
+This is a simple batch ingestion system for large JSON payloads. It keeps the API fast by sending work to Redis/BullMQ and letting a background worker process the records while PostgreSQL tracks the job state.
 
 ## How it works
 

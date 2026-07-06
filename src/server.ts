@@ -48,6 +48,7 @@ const shutdown = async (): Promise<void> => {
   await new Promise<void>((resolve) => {
     io.close(() => resolve());
   });
+  
   await prisma.$disconnect();
   await redisConnection.quit().catch(() => undefined);
   await new Promise<void>((resolve) => {

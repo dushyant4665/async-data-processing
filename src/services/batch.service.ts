@@ -1,183 +1,143 @@
-import { Prisma } from '@prisma/client';
-import type { InputJsonValue } from '@prisma/client/runtime/library';
 import { prisma } from '../config/database.js';
-import { emitBatchProgressSafely } from '../realtime/batch-progress.js';
-import {
-  batchQueue,
-  PROCESS_BATCH_JOB_NAME,
-  type BatchQueuePayload,
-  type BatchRecordInput
-} from '../queues/batch.queue.js';
+import { batchQueue, PROCESS_BATCH_JOB_NAME, type BatchQueuePayload } from '../queues/batch.queue.js';
 
 const CHUNK_SIZE = 100;
 
-const isPlainRecord = (value: unknown): value is BatchRecordInput => {
+const isRecord = (value: unknown): boolean => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
-const makeBatchFileName = (): string => {
-  return `batch-${Date.now()}.json`;
-};
+const failJob = async (jobId: string, reason: string): Promise<void> => {
+  await prisma.jobError.create({
+    data: {
+      batchJobId: jobId,
+      rowNumber: 0,
+      reason
+    }
+  });
 
-const failBatchJob = async (jobId: string, reason: string): Promise<void> => {
-  const job = await prisma.$transaction([
-    prisma.jobError.create({
-      data: {
-        batchJobId: jobId,
-        rowNumber: 0,
-        reason
-      }
-    }),
-    prisma.batchJob.update({
-      where: { id: jobId },
-      data: { status: 'FAILED' }
-    })
-  ]);
-
-  await emitBatchProgressSafely({
-    jobId,
-    status: 'FAILED',
-    totalRows: job[1].totalRows,
-    processedRows: job[1].processedRows,
-    reason
+  await prisma.batchJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'FAILED'
+    }
   });
 };
 
 const saveChunk = async (jobId: string, records: unknown[], startRow: number): Promise<void> => {
-  const queries: Prisma.PrismaPromise<unknown>[] = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    const rowNumber = startRow + i + 1;
 
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index];
-    const rowNumber = startRow + index + 1;
-
-    if (!isPlainRecord(record) || Object.keys(record).length === 0) {
-      queries.push(
-        prisma.jobError.create({
-          data: {
-            batchJobId: jobId,
-            rowNumber,
-            reason: 'Invalid record format'
-          }
-        })
-      );
+    if (!isRecord(record)) {
+      await prisma.jobError.create({
+        data: {
+          batchJobId: jobId,
+          rowNumber: rowNumber,
+          reason: 'Invalid record format'
+        }
+      });
       continue;
     }
 
-    queries.push(
-      prisma.ingestedRecord.create({
+    const recordData = record as Record<string, unknown>;
+
+    if (Object.keys(recordData).length === 0) {
+      await prisma.jobError.create({
         data: {
           batchJobId: jobId,
-          rowNumber,
-          payload: record as InputJsonValue
+          rowNumber: rowNumber,
+          reason: 'Invalid record format'
         }
-      })
-    );
-  }
+      });
+      continue;
+    }
 
-  if (queries.length > 0) {
-    await prisma.$transaction(queries);
+    await prisma.ingestedRecord.create({
+      data: {
+        batchJobId: jobId,
+        rowNumber: rowNumber,
+        payload: recordData as any
+      }
+    });
   }
 };
 
 export const createBatchJobFromRawText = async (rawBody: string): Promise<{ jobId: string }> => {
-  if (typeof rawBody !== 'string' || rawBody.trim().length === 0) {
+  if (typeof rawBody !== 'string' || rawBody.trim() === '') {
     throw new Error('request body must contain a JSON array string');
   }
 
-  const fileName = makeBatchFileName();
+  const fileName = 'batch-' + Date.now() + '.json';
   const job = await prisma.batchJob.create({
     data: {
       fileName,
+      status: 'PENDING',
       totalRows: 0,
-      status: 'PENDING'
+      processedRows: 0
     }
   });
 
-  const payload: BatchQueuePayload = {
-    jobId: job.id,
-    fileName,
-    rawRecords: rawBody
-  };
-
   try {
-    await batchQueue.add(PROCESS_BATCH_JOB_NAME, payload, {
-      jobId: job.id,
-      removeOnComplete: true,
-      removeOnFail: false
-    });
+    await batchQueue.add(
+      PROCESS_BATCH_JOB_NAME,
+      {
+        jobId: job.id,
+        fileName,
+        rawRecords: rawBody
+      },
+      {
+        jobId: job.id,
+        removeOnComplete: true,
+        removeOnFail: false
+      }
+    );
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Failed to queue batch job';
-    await failBatchJob(job.id, reason);
-    throw new Error(reason);
+    const message = error instanceof Error ? error.message : 'Failed to queue batch job';
+    await failJob(job.id, message);
+    throw new Error(message);
   }
-
-  await emitBatchProgressSafely({
-    jobId: job.id,
-    status: 'PENDING',
-    totalRows: 0,
-    processedRows: 0
-  });
 
   return { jobId: job.id };
 };
 
-export const processBatchJob = async (payload: BatchQueuePayload): Promise<{
-  jobId: string;
-  totalRows: number;
-  processedRows: number;
-}> => {
-  const parsedRecords: unknown = JSON.parse(payload.rawRecords);
+export const processBatchJob = async (payload: BatchQueuePayload) => {
+  const parsed = JSON.parse(payload.rawRecords);
 
-  if (!Array.isArray(parsedRecords)) {
+  if (!Array.isArray(parsed)) {
     throw new Error('request body must be a JSON array');
   }
 
-  const records = parsedRecords as unknown[];
+  const records = parsed as unknown[];
   const totalRows = records.length;
 
   await prisma.batchJob.update({
     where: { id: payload.jobId },
     data: {
       status: 'PROCESSING',
-      totalRows,
+      totalRows: totalRows,
       processedRows: 0
     }
   });
 
-  await emitBatchProgressSafely({
-    jobId: payload.jobId,
-    status: 'PROCESSING',
-    totalRows,
-    processedRows: 0
-  });
-
-  // Process fixed-size blocks so the worker stays steady on large payloads.
   for (let startRow = 0; startRow < totalRows; startRow += CHUNK_SIZE) {
     const chunk = records.slice(startRow, startRow + CHUNK_SIZE);
-
     await saveChunk(payload.jobId, chunk, startRow);
 
-    const processedRows = Math.min(startRow + chunk.length, totalRows);
+    const processedRows = startRow + chunk.length;
 
     await prisma.batchJob.update({
       where: { id: payload.jobId },
       data: {
-        processedRows,
+        processedRows: processedRows,
         status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
       }
-    });
-
-    await emitBatchProgressSafely({
-      jobId: payload.jobId,
-      status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING',
-      totalRows,
-      processedRows
     });
   }
 
   return {
     jobId: payload.jobId,
-    totalRows,
+    totalRows: totalRows,
     processedRows: totalRows
   };
 };
@@ -197,5 +157,5 @@ export const getBatchJobById = async (jobId: string) => {
 };
 
 export const markBatchJobFailed = async (jobId: string, reason: string): Promise<void> => {
-  await failBatchJob(jobId, reason);
+  await failJob(jobId, reason);
 };

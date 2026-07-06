@@ -1,6 +1,7 @@
 {
   "name": "distributed-loader",
   "version": "1.0.0",
+  "description": "A simple batch ingestion system that queues large JSON payloads and processes them in background workers.",
   "private": true,
   "type": "module",
   "scripts": {

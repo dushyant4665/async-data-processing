@@ -1,9 +1,14 @@
 import { spawn } from 'node:child_process';
 
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const api = spawn('npm', ['run', 'dev:api'], {
+  stdio: 'inherit',
+  shell: true
+});
 
-const api = spawn(npmCmd, ['run', 'dev:api'], { stdio: 'inherit' });
-const worker = spawn(npmCmd, ['run', 'dev:worker'], { stdio: 'inherit' });
+const worker = spawn('npm', ['run', 'dev:worker'], {
+  stdio: 'inherit',
+  shell: true
+});
 
 const shutdown = () => {
   api.kill();
