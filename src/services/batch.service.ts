@@ -3,105 +3,36 @@ import { batchQueue, PROCESS_BATCH_JOB_NAME, type BatchQueuePayload } from '../q
 
 const CHUNK_SIZE = 100;
 
-const isRecord = (value: unknown): boolean => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-};
+function isValidRecord(record: unknown): record is Record<string, unknown> {
+  return typeof record === 'object' && record !== null && !Array.isArray(record) && Object.keys(record).length > 0;
+}
 
-const failJob = async (jobId: string, reason: string): Promise<void> => {
-  await prisma.jobError.create({
-    data: {
-      batchJobId: jobId,
-      rowNumber: 0,
-      reason
-    }
-  });
-
-  await prisma.batchJob.update({
-    where: { id: jobId },
-    data: {
-      status: 'FAILED'
-    }
-  });
-};
-
-const saveChunk = async (jobId: string, records: unknown[], startRow: number): Promise<void> => {
-  for (let i = 0; i < records.length; i += 1) {
-    const record = records[i];
-    const rowNumber = startRow + i + 1;
-
-    if (!isRecord(record)) {
-      await prisma.jobError.create({
-        data: {
-          batchJobId: jobId,
-          rowNumber: rowNumber,
-          reason: 'Invalid record format'
-        }
-      });
-      continue;
-    }
-
-    const recordData = record as Record<string, unknown>;
-
-    if (Object.keys(recordData).length === 0) {
-      await prisma.jobError.create({
-        data: {
-          batchJobId: jobId,
-          rowNumber: rowNumber,
-          reason: 'Invalid record format'
-        }
-      });
-      continue;
-    }
-
-    await prisma.ingestedRecord.create({
-      data: {
-        batchJobId: jobId,
-        rowNumber: rowNumber,
-        payload: recordData as any
-      }
-    });
-  }
-};
-
-export const createBatchJobFromRawText = async (rawBody: string): Promise<{ jobId: string }> => {
+export async function createBatchJobFromRawText(rawBody: unknown): Promise<{ jobId: string }> {
   if (typeof rawBody !== 'string' || rawBody.trim() === '') {
     throw new Error('request body must contain a JSON array string');
   }
 
-  const fileName = 'batch-' + Date.now() + '.json';
+  const fileName = `batch-${Date.now()}.json`;
   const job = await prisma.batchJob.create({
-    data: {
-      fileName,
-      status: 'PENDING',
-      totalRows: 0,
-      processedRows: 0
-    }
+    data: { fileName, status: 'PENDING', totalRows: 0, processedRows: 0 },
   });
 
   try {
     await batchQueue.add(
       PROCESS_BATCH_JOB_NAME,
-      {
-        jobId: job.id,
-        fileName,
-        rawRecords: rawBody
-      },
-      {
-        jobId: job.id,
-        removeOnComplete: true,
-        removeOnFail: false
-      }
+      { jobId: job.id, fileName, rawRecords: rawBody },
+      { jobId: job.id, removeOnComplete: true, removeOnFail: false },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to queue batch job';
-    await failJob(job.id, message);
+    await markBatchJobFailed(job.id, message);
     throw new Error(message);
   }
 
   return { jobId: job.id };
-};
+}
 
-export const processBatchJob = async (payload: BatchQueuePayload) => {
+export async function processBatchJob(payload: BatchQueuePayload) {
   const parsed = JSON.parse(payload.rawRecords);
 
   if (!Array.isArray(parsed)) {
@@ -109,53 +40,38 @@ export const processBatchJob = async (payload: BatchQueuePayload) => {
   }
 
   const records = parsed as unknown[];
-  const totalRows = records.length;
+
+  for (let start = 0; start < records.length; start += CHUNK_SIZE) {
+    const chunk = records.slice(start, start + CHUNK_SIZE);
+
+    for (const [index, record] of chunk.entries()) {
+      const rowNumber = start + index + 1;
+
+      if (!isValidRecord) {
+        await prisma.jobError.create({ data: { batchJobId: payload.jobId, rowNumber, reason: 'Invalid record format' } });
+      } else {
+        await prisma.ingestedRecord.create({ data: { batchJobId: payload.jobId, rowNumber, payload: record as any } });
+      }
+    }
+
+  }
 
   await prisma.batchJob.update({
     where: { id: payload.jobId },
-    data: {
-      status: 'PROCESSING',
-      totalRows: totalRows,
-      processedRows: 0
-    }
+    data: { status: 'COMPLETED', totalRows: records.length, processedRows: records.length },
   });
 
-  for (let startRow = 0; startRow < totalRows; startRow += CHUNK_SIZE) {
-    const chunk = records.slice(startRow, startRow + CHUNK_SIZE);
-    await saveChunk(payload.jobId, chunk, startRow);
+  return { jobId: payload.jobId, totalRows: records.length, processedRows: records.length };
+}
 
-    const processedRows = startRow + chunk.length;
-
-    await prisma.batchJob.update({
-      where: { id: payload.jobId },
-      data: {
-        processedRows: processedRows,
-        status: processedRows >= totalRows ? 'COMPLETED' : 'PROCESSING'
-      }
-    });
-  }
-
-  return {
-    jobId: payload.jobId,
-    totalRows: totalRows,
-    processedRows: totalRows
-  };
-};
-
-export const getBatchJobById = async (jobId: string) => {
+export async function getBatchJobById(jobId: string) {
   return prisma.batchJob.findUnique({
     where: { id: jobId },
-    include: {
-      _count: {
-        select: {
-          records: true,
-          errors: true
-        }
-      }
-    }
+    include: { _count: { select: { records: true, errors: true } } },
   });
-};
+}
 
-export const markBatchJobFailed = async (jobId: string, reason: string): Promise<void> => {
-  await failJob(jobId, reason);
-};
+export async function markBatchJobFailed(jobId: string, reason: string): Promise<void> {
+  await prisma.jobError.create({ data: { batchJobId: jobId, rowNumber: 0, reason } });
+  await prisma.batchJob.update({ where: { id: jobId }, data: { status: 'FAILED' } });
+}

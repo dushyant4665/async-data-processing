@@ -1,33 +1,24 @@
 import { Worker } from 'bullmq';
-import {
-  BATCH_QUEUE_NAME,
-  bullmqConnection,
-  PROCESS_BATCH_JOB_NAME
-} from '../queues/batch.queue.js';
-import { markBatchJobFailed, processBatchJob } from '../services/batch.service.js';
+import { BATCH_QUEUE_NAME, PROCESS_BATCH_JOB_NAME } from '../queues/batch.queue.js';
+import { redisConnection } from '../config/redis.js';
+import { processBatchJob, markBatchJobFailed } from '../services/batch.service.js';
 
-export const startBatchWorker = () => {
+export function startBatchWorker(): Worker {
   return new Worker(
     BATCH_QUEUE_NAME,
-    async (job: any) => {
+    async (job) => {
       if (job.name !== PROCESS_BATCH_JOB_NAME) {
         throw new Error('Unexpected job name');
       }
-
-      const jobId = job.data.jobId;
 
       try {
         return await processBatchJob(job.data);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Worker failed';
-        await markBatchJobFailed(jobId, message);
-
+        await markBatchJobFailed(job.data.jobId, message);
         throw error;
       }
     },
-    {
-      connection: bullmqConnection,
-      concurrency: 2
-    }
+    { connection: redisConnection as any, concurrency: 2 }
   );
-};
+}

@@ -9,7 +9,6 @@ generator client {
 
 enum BatchJobStatus {
   PENDING
-  PROCESSING
   COMPLETED
   FAILED
 }

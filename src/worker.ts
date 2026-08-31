@@ -5,12 +5,12 @@ import { startBatchWorker } from './workers/batch.worker.js';
 
 const worker = startBatchWorker();
 
-const shutdown = async (): Promise<void> => {
+async function shutdown() {
   await worker.close().catch(() => undefined);
   await prisma.$disconnect();
   await redisConnection.quit().catch(() => undefined);
   process.exit(0);
-};
+}
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

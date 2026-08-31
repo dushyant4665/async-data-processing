@@ -1,51 +1,55 @@
 # Asynchronous Batch Ingestion Engine
 
-This is a simple batch ingestion system for large JSON payloads. It keeps the API fast by sending work to Redis/BullMQ and letting a background worker process the records while PostgreSQL tracks the job state.
+This app accepts a large JSON array, queues it in Redis, and processes it in a background worker. PostgreSQL stores the batch status, saved records, and invalid-record errors.
 
-## How it works
+## Flow
 
 ```mermaid
 flowchart LR
-  A[Client] --> B[API]
-  B --> C[(PostgreSQL)]
-  B --> D[Redis Queue]
-  D --> E[Worker]
-  E --> C
+  Client --> API
+  API --> PostgreSQL
+  API --> RedisQueue[Redis / BullMQ]
+  RedisQueue --> Worker
+  Worker --> PostgreSQL
 ```
 
-1. Client sends raw JSON array text.
-2. API creates a `BatchJob`.
-3. API adds the job to BullMQ.
-4. Worker reads the job and processes records in chunks.
-5. Valid rows go into `IngestedRecord`.
-6. Bad rows go into `JobError`.
+1. Send a JSON array to the API.
+2. The API creates a batch with status `PENDING` and queues it.
+3. The worker validates and saves each record.
+4. The batch becomes `COMPLETED` or `FAILED`.
+
+## Statuses
+
+- `PENDING` - waiting in the queue or being processed.
+- `COMPLETED` - all rows were handled.
+- `FAILED` - the batch could not be queued or processed.
+
 ## Stack
 
-- Node.js
-- TypeScript
+- Node.js and TypeScript
 - Express
-- PostgreSQL
-- Prisma
-- Redis
-- BullMQ
+- PostgreSQL and Prisma
+- Redis and BullMQ
 - Docker
 
-## What is implemented
-
-- API accepts raw JSON array text and returns quickly with a queued job id.
-- Worker processes records in small chunks of 100 so memory use stays lower.
-- PostgreSQL stores job state, valid rows, and row-level errors.
-- Redis + BullMQ handles background processing.
-- Docker runs API, worker, Postgres, and Redis together.
-- `npm run benchmark` compares one-shot processing with chunked async processing.
-
 ## Run locally
+
+Install dependencies and generate the Prisma client:
 
 ```bash
 npm install
 npx prisma generate
 npm run prisma:deploy
-npm run dev
+```
+
+Start the API and worker in separate terminals:
+
+```bash
+npm run dev:api
+```
+
+```bash
+npm run dev:worker
 ```
 
 ## Docker
@@ -62,15 +66,22 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/distributed_loader
 REDIS_URL=redis://127.0.0.1:6379
 ```
 
-## Request
+## API
 
-Send a raw JSON array:
+### Create a batch
+
+```http
+POST /api/batch
+Content-Type: application/json
+```
+
+Send a raw JSON array as the request body:
 
 ```json
 [{"name":"A"},{"name":"B"}]
 ```
 
-## Response
+The API responds immediately:
 
 ```json
 {
@@ -80,12 +91,10 @@ Send a raw JSON array:
 }
 ```
 
-## Check Job Status
-
-Get one batch job by id:
+### Check a batch
 
 ```http
 GET /api/batch/:jobId
 ```
 
-Response includes the job status, row counts, and record/error totals.
+The response contains the batch status, row counts, and counts of valid records and errors.
